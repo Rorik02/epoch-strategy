@@ -8,8 +8,7 @@ import com.badlogic.gdx.graphics.g3d.ModelBatch;
 import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.math.collision.BoundingBox;
 import com.badlogic.gdx.utils.Disposable;
-
-import com.epochstrategy.core.world.WorldMap;
+import com.epochstrategy.core.world.*;
 
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;

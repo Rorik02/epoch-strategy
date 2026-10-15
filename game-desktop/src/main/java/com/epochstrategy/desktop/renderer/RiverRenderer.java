@@ -14,14 +14,11 @@ import com.badlogic.gdx.graphics.g3d.utils.MeshPartBuilder;
 import com.badlogic.gdx.graphics.g3d.utils.ModelBuilder;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.utils.Disposable;
-
-import com.epochstrategy.core.world.RiverNetwork;
-import com.epochstrategy.core.world.TerrainType;
-import com.epochstrategy.core.world.WorldMap;
+import com.epochstrategy.core.world.*;
 
 public final class RiverRenderer implements Disposable {
 
-    private static final float RIVER_WIDTH = 0.16f;
+
     private static final float SURFACE_OFFSET = 0.035f;
 
     private final Model model;
@@ -70,6 +67,13 @@ public final class RiverRenderer implements Disposable {
         for (RiverNetwork.RiverSegment segment
                 : network.getSegments()) {
 
+
+            RiverProperties properties =
+                    network.getProperties(segment);
+
+            float riverWidth = properties.width() * 0.65f;
+
+
             int fromX = segment.fromX();
             int fromY = segment.fromY();
 
@@ -96,12 +100,15 @@ public final class RiverRenderer implements Disposable {
             float midZ = (z1 + z2) * 0.5f;
 
             // First half: source tile center to shared edge
+
             addRibbon(
                     mesh,
                     map,
                     x1, z1,
-                    midX, midZ
+                    midX, midZ,
+                    riverWidth
             );
+
 
             TerrainType destinationTerrain =
                     map.getTile(toX, toY).getTerrain();
@@ -113,17 +120,21 @@ public final class RiverRenderer implements Disposable {
             // Stop at the shoreline when entering water
             if (!destinationIsWater) {
 
+
                 addRibbon(
                         mesh,
                         map,
                         midX, midZ,
-                        x2, z2
+                        x2, z2,
+                        riverWidth
                 );
+
             }
         }
 
         return builder.end();
     }
+
 
     private void addRibbon(
             MeshPartBuilder mesh,
@@ -131,7 +142,8 @@ public final class RiverRenderer implements Disposable {
             float startX,
             float startZ,
             float endX,
-            float endZ
+            float endZ,
+            float riverWidth
     ) {
 
         float dx = endX - startX;
@@ -145,7 +157,7 @@ public final class RiverRenderer implements Disposable {
             return;
         }
 
-        float halfWidth = RIVER_WIDTH * 0.5f;
+        float halfWidth = riverWidth * 0.5f;
 
         float sideX = -dz / length * halfWidth;
         float sideZ = dx / length * halfWidth;
@@ -177,6 +189,7 @@ public final class RiverRenderer implements Disposable {
         addTriangle(mesh, a, b, c);
         addTriangle(mesh, b, d, c);
     }
+
 
     private Vector3 terrainVertex(
             WorldMap map,
