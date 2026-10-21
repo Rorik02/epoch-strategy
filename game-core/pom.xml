@@ -13,6 +13,20 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
 
+
+
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.12.2</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+
+
+
     <artifactId>game-core</artifactId>
     <packaging>jar</packaging>
 
