@@ -1,10 +1,23 @@
 package com.epochstrategy.desktop;
 
-import com.badlogic.gdx.*;
-import com.badlogic.gdx.graphics.*;
+import com.badlogic.gdx.ApplicationAdapter;
+import com.badlogic.gdx.Gdx;
+import com.badlogic.gdx.Input;
+import com.badlogic.gdx.InputAdapter;
+import com.badlogic.gdx.InputMultiplexer;
+import com.badlogic.gdx.graphics.Color;
+import com.badlogic.gdx.graphics.GL20;
+import com.badlogic.gdx.graphics.PerspectiveCamera;
+import com.badlogic.gdx.graphics.Pixmap;
+import com.badlogic.gdx.graphics.Texture;
+import com.badlogic.gdx.graphics.VertexAttributes;
 import com.badlogic.gdx.graphics.g2d.BitmapFont;
 import com.badlogic.gdx.graphics.g2d.TextureRegion;
-import com.badlogic.gdx.graphics.g3d.*;
+import com.badlogic.gdx.graphics.g3d.Environment;
+import com.badlogic.gdx.graphics.g3d.Material;
+import com.badlogic.gdx.graphics.g3d.Model;
+import com.badlogic.gdx.graphics.g3d.ModelBatch;
+import com.badlogic.gdx.graphics.g3d.ModelInstance;
 import com.badlogic.gdx.graphics.g3d.attributes.ColorAttribute;
 import com.badlogic.gdx.graphics.g3d.environment.DirectionalLight;
 import com.badlogic.gdx.graphics.g3d.utils.CameraInputController;
@@ -13,27 +26,70 @@ import com.badlogic.gdx.math.Intersector;
 import com.badlogic.gdx.math.Quaternion;
 import com.badlogic.gdx.math.Vector3;
 import com.badlogic.gdx.math.collision.Ray;
+import com.badlogic.gdx.scenes.scene2d.Actor;
 import com.badlogic.gdx.scenes.scene2d.Stage;
 import com.badlogic.gdx.scenes.scene2d.Touchable;
 import com.badlogic.gdx.scenes.scene2d.ui.Label;
 import com.badlogic.gdx.scenes.scene2d.ui.Table;
+import com.badlogic.gdx.scenes.scene2d.ui.TextButton;
+import com.badlogic.gdx.scenes.scene2d.utils.ChangeListener;
 import com.badlogic.gdx.scenes.scene2d.utils.TextureRegionDrawable;
 import com.badlogic.gdx.utils.Array;
 import com.badlogic.gdx.utils.viewport.ScreenViewport;
+
+import com.epochstrategy.core.building.BuildingType;
+import com.epochstrategy.core.city.City;
+import com.epochstrategy.core.city.CityFoodService;
+import com.epochstrategy.core.city.CityGenerator;
+import com.epochstrategy.core.city.CityPlacementService;
+import com.epochstrategy.core.city.CityPopulationService;
+import com.epochstrategy.core.civilization.CivilizationDemoInitializer;
 import com.epochstrategy.core.economy.ResourceInventory;
 import com.epochstrategy.core.economy.ResourceType;
 import com.epochstrategy.core.engine.GameEngine;
 import com.epochstrategy.core.engine.GameState;
-import com.epochstrategy.core.world.*;
-import com.epochstrategy.desktop.renderer.*;
+import com.epochstrategy.core.territory.TerritoryExpansionConfig;
+import com.epochstrategy.core.territory.TerritoryExpansionService;
+import com.epochstrategy.core.territory.TerritoryGenerator;
+import com.epochstrategy.core.world.DrainageMap;
+import com.epochstrategy.core.world.LakeGenerator;
+import com.epochstrategy.core.world.MapType;
+import com.epochstrategy.core.world.ProceduralMapGenerator;
+import com.epochstrategy.core.world.RiverGenerator;
+import com.epochstrategy.core.world.RiverNavigationService;
+import com.epochstrategy.core.world.RiverNetwork;
+import com.epochstrategy.core.world.RiverProperties;
+import com.epochstrategy.core.world.RiverTransportManager;
+import com.epochstrategy.core.world.RiverTransportService;
+import com.epochstrategy.core.world.RiverTransportUnit;
+import com.epochstrategy.core.world.RiverVesselType;
+import com.epochstrategy.core.world.TerrainType;
+import com.epochstrategy.core.world.Tile;
+import com.epochstrategy.core.world.WatershedCalculator;
+import com.epochstrategy.core.world.WaterwayFastestRouteFinder;
+import com.epochstrategy.core.world.WorldMap;
+import com.epochstrategy.desktop.renderer.CityBuildingRenderer;
+import com.epochstrategy.desktop.renderer.CityRenderer;
+import com.epochstrategy.desktop.renderer.RiverRenderer;
+import com.epochstrategy.desktop.renderer.RiverRouteRenderer;
+import com.epochstrategy.desktop.renderer.RiverTransportFleetRenderer;
+import com.epochstrategy.desktop.renderer.TerrainChunkManager;
+import com.epochstrategy.desktop.renderer.TerrainMeshBuilder;
+import com.epochstrategy.desktop.renderer.TerritoryBorderRenderer;
 
+import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
 
 /** Desktop UI and rendering. All authoritative turn and cargo state live in game-core. */
 public class EpochGame extends ApplicationAdapter {
+
+    // -------------------------------------------------------------------------
+    // World generation configuration
+    // -------------------------------------------------------------------------
 
     private static final int MAP_WIDTH = 100;
     private static final int MAP_HEIGHT = 100;
@@ -43,27 +99,15 @@ public class EpochGame extends ApplicationAdapter {
     private static final long RIVER_SEED = 12345L;
     private static final MapType MAP_TYPE = MapType.PANGAEA;
 
+    // World and game state
+
     private WorldMap worldMap;
     private DrainageMap drainageMap;
     private RiverNetwork riverNetwork;
-    private Tile selectedTile;
-    private Tile riverRouteStart;
-
     private GameState gameState;
     private GameEngine gameEngine;
-    private long nextRiverUnitId = 1L;
-    private RiverTransportUnit selectedTransportUnit;
 
-    private final Map<
-            Long,
-            WaterwayFastestRouteFinder.WaterwayRoute
-            > riverRoutesByUnit = new HashMap<>();
-
-    private final Map<Long, ResourceInventory> demoDestinationsByUnit =
-            new HashMap<>();
-
-    private String riverRouteStatus =
-            "Shift + Left Click: select river route start";
+    // Camera and rendering
 
     private PerspectiveCamera camera;
     private CameraInputController cameraController;
@@ -73,16 +117,60 @@ public class EpochGame extends ApplicationAdapter {
     private RiverRenderer riverRenderer;
     private RiverRouteRenderer riverRouteRenderer;
     private RiverTransportFleetRenderer riverTransportRenderer;
+    private CityRenderer cityRenderer;
+    private CityBuildingRenderer cityBuildingRenderer;
+    private TerritoryBorderRenderer territoryBorderRenderer;
 
     private final Array<Model> models = new Array<>();
     private final Array<ModelInstance> tiles = new Array<>();
     private final Array<ModelInstance> selectionOutline = new Array<>();
     private Model selectionEdgeModel;
+    private Tile selectedTile;
+
+    // River transport and routing
+
+    private Tile riverRouteStart;
+    private long nextRiverUnitId = 1L;
+    private RiverTransportUnit selectedTransportUnit;
+
+    private final Map<Long, WaterwayFastestRouteFinder.WaterwayRoute>
+            riverRoutesByUnit = new HashMap<>();
+
+    private final Map<Long, ResourceInventory> demoDestinationsByUnit =
+            new HashMap<>();
+
+    private String riverRouteStatus =
+            "Shift + Left Click: select river route start";
+
+    // UI: information and city construction
 
     private Stage uiStage;
     private BitmapFont font;
     private Texture panelTexture;
+    private Texture buttonTexture;
+    private Texture buttonHoverTexture;
     private Label tileInfoLabel;
+    private Table buildingPanel;
+    private Label buildingSummaryLabel;
+    private Label buildingStatusLabel;
+
+    private final EnumMap<BuildingType, TextButton> buildingButtons =
+            new EnumMap<>(BuildingType.class);
+
+    // UI: territorial expansion
+
+    private final TerritoryExpansionService expansionService =
+            new TerritoryExpansionService();
+
+    private final Array<ModelInstance> expansionOutlines = new Array<>();
+    private Long expansionCityId = null;
+    private TextButton expandTerritoryButton;
+    private TextButton autoExpansionButton;
+    private Label expansionStatusLabel;
+
+    // =========================================================================
+    // Application lifecycle: initialization
+    // =========================================================================
 
     @Override
     public void create() {
@@ -103,6 +191,124 @@ public class EpochGame extends ApplicationAdapter {
 
         gameState = new GameState();
         gameEngine = new GameEngine(gameState, worldMap, riverNetwork);
+
+        CityPlacementService cityPlacementService =
+                new CityPlacementService(6);
+
+        CityGenerator cityGenerator =
+                new CityGenerator(cityPlacementService);
+
+        var generatedCities = cityGenerator.generate(
+                worldMap,
+                riverNetwork,
+                gameState.getCityManager(),
+                12,
+                9876L
+        );
+
+        // Temporary starting resources for construction tests.
+        for (City city : gameState.getCityManager().getCities()) {
+
+            city.getInventory().add(
+                    ResourceType.WOOD,
+                    40
+            );
+
+            city.getInventory().add(
+                    ResourceType.STONE,
+                    30
+            );
+        }
+
+        CivilizationDemoInitializer.initialize(
+                gameState.getCivilizationManager(),
+                gameState.getCityManager()
+        );
+
+        TerritoryGenerator territoryGenerator =
+                new TerritoryGenerator(
+                        TerritoryExpansionConfig.INITIAL_RADIUS,
+                        true
+                );
+
+        int generatedTerritoryTiles =
+                territoryGenerator.generate(
+                        worldMap,
+                        gameState.getCityManager(),
+                        gameState.getCivilizationManager(),
+                        gameState.getTerritoryManager()
+                );
+
+        territoryBorderRenderer =
+                new TerritoryBorderRenderer(worldMap);
+
+        territoryBorderRenderer.refresh(
+                gameState.getTerritoryManager(),
+                gameState.getCivilizationManager()
+        );
+
+        System.out.println(
+                "=== TERRITORIES ==="
+        );
+
+        System.out.println(
+                "Total controlled tiles: "
+                        + generatedTerritoryTiles
+        );
+
+        for (var civilization :
+                gameState.getCivilizationManager()
+                        .getCivilizations()) {
+
+            int controlledTiles =
+                    gameState.getTerritoryManager()
+                            .getClaimedTileCount(
+                                    civilization.getId()
+                            );
+
+            System.out.println(
+                    civilization.getName()
+                            + " controls "
+                            + controlledTiles
+                            + " tiles"
+            );
+        }
+
+        System.out.println("=== CIVILIZATIONS ===");
+
+        for (var civilization :
+                gameState.getCivilizationManager().getCivilizations()) {
+
+            int cityCount =
+                    gameState.getCityManager()
+                            .getCitiesByCivilization(
+                                    civilization.getId()
+                            )
+                            .size();
+
+            System.out.println(
+                    civilization.getName()
+                            + " | Cities: " + cityCount
+                            + " | Color: " + civilization.getHexColor()
+            );
+        }
+
+        System.out.println(
+                "Generated cities: " + generatedCities.size()
+        );
+
+        for (City city : generatedCities) {
+
+            System.out.println(
+                    city.getName()
+                            + " | Position: "
+                            + city.getX()
+                            + ", "
+                            + city.getY()
+                            + " | Population: "
+                            + city.getPopulation()
+            );
+        }
 
         modelBatch = new ModelBatch();
         environment = new Environment();
@@ -127,12 +333,32 @@ public class EpochGame extends ApplicationAdapter {
         riverRouteRenderer = new RiverRouteRenderer(worldMap);
         riverTransportRenderer = new RiverTransportFleetRenderer(worldMap);
 
+        cityRenderer = new CityRenderer(worldMap);
+
+        cityRenderer.setCities(
+                gameState.getCityManager().getCities(),
+                gameState.getCivilizationManager()
+        );
+
+        cityBuildingRenderer =
+                new CityBuildingRenderer(worldMap);
+
+        cityBuildingRenderer.refresh(
+                gameState.getCityManager().getCities(),
+                gameState.getCityBuildingManager()
+        );
+
         createWorldModels();
         createSelectionModels();
         createUI();
         setupInput();
         updateInfoPanel();
     }
+
+
+    // =========================================================================
+    // World generation and rendering setup
+    // =========================================================================
 
     private void printDrainageStatistics() {
         int withDrainage = 0;
@@ -295,36 +521,1200 @@ public class EpochGame extends ApplicationAdapter {
         models.add(selectionEdgeModel);
     }
 
+    private float getWorldX(int tileX) {
+        return tileX - (worldMap.getWidth() - 1) / 2f;
+    }
+
+    private float getWorldZ(int tileY) {
+        return tileY - (worldMap.getHeight() - 1) / 2f;
+    }
+
+
+    // =========================================================================
+    // UI initialization and layout
+    // =========================================================================
+
     private void createUI() {
+
         uiStage = new Stage(new ScreenViewport());
+
         font = new BitmapFont();
         font.getData().setScale(1.1f);
 
+        Label.LabelStyle labelStyle =
+                new Label.LabelStyle(
+                        font,
+                        Color.WHITE
+                );
+
         tileInfoLabel = new Label(
                 "Select a tile to view information",
-                new Label.LabelStyle(font, Color.WHITE)
+                labelStyle
         );
 
-        Pixmap pixmap = new Pixmap(1, 1, Pixmap.Format.RGBA8888);
-        pixmap.setColor(0.06f, 0.09f, 0.15f, 0.90f);
+        // Background for information panels.
+        Pixmap pixmap = new Pixmap(
+                1, 1, Pixmap.Format.RGBA8888
+        );
+
+        pixmap.setColor(
+                0.06f, 0.09f, 0.15f, 0.90f
+        );
         pixmap.fill();
+
         panelTexture = new Texture(pixmap);
         pixmap.dispose();
 
-        Table panel = new Table();
-        panel.setBackground(new TextureRegionDrawable(
-                new TextureRegion(panelTexture)));
-        panel.pad(15);
-        panel.add(tileInfoLabel).left();
+        // Normal button background.
+        pixmap = new Pixmap(
+                1, 1, Pixmap.Format.RGBA8888
+        );
 
+        pixmap.setColor(
+                0.16f, 0.25f, 0.35f, 1f
+        );
+        pixmap.fill();
+
+        buttonTexture = new Texture(pixmap);
+        pixmap.dispose();
+
+        // Hover / pressed button background.
+        pixmap = new Pixmap(
+                1, 1, Pixmap.Format.RGBA8888
+        );
+
+        pixmap.setColor(
+                0.25f, 0.39f, 0.50f, 1f
+        );
+        pixmap.fill();
+
+        buttonHoverTexture = new Texture(pixmap);
+        pixmap.dispose();
+
+        var panelDrawable =
+                new TextureRegionDrawable(
+                        new TextureRegion(panelTexture)
+                );
+
+        var normalButtonDrawable =
+                new TextureRegionDrawable(
+                        new TextureRegion(buttonTexture)
+                );
+
+        var hoverButtonDrawable =
+                new TextureRegionDrawable(
+                        new TextureRegion(buttonHoverTexture)
+                );
+
+        TextButton.TextButtonStyle buttonStyle =
+                new TextButton.TextButtonStyle();
+
+        buttonStyle.font = font;
+        buttonStyle.fontColor = Color.WHITE;
+        buttonStyle.disabledFontColor = Color.GRAY;
+
+        buttonStyle.up = normalButtonDrawable;
+        buttonStyle.over = hoverButtonDrawable;
+        buttonStyle.down = hoverButtonDrawable;
+
+        // LEFT PANEL - tile and city information.
+        Table infoPanel = new Table();
+
+        infoPanel.setBackground(panelDrawable);
+        infoPanel.pad(15);
+
+        infoPanel.add(tileInfoLabel).left();
+
+        // RIGHT PANEL - building construction.
+        buildingPanel = new Table();
+
+        buildingPanel.setBackground(panelDrawable);
+        buildingPanel.pad(12);
+
+        Label title = new Label(
+                "CITY CONSTRUCTION",
+                labelStyle
+        );
+
+        buildingPanel.add(title)
+                .left()
+                .padBottom(10)
+                .row();
+
+        buildingSummaryLabel = new Label(
+                "",
+                labelStyle
+        );
+
+        buildingPanel.add(buildingSummaryLabel)
+                .left()
+                .padBottom(12)
+                .row();
+
+        // Create one button for every building type.
+        for (BuildingType type : BuildingType.values()) {
+
+            TextButton button = new TextButton(
+                    type.name(),
+                    buttonStyle
+            );
+
+            button.pad(7);
+
+            button.addListener(new ChangeListener() {
+
+                @Override
+                public void changed(
+                        ChangeEvent event,
+                        Actor actor
+                ) {
+
+                    if (button.isDisabled()) {
+                        return;
+                    }
+
+                    constructSelectedBuilding(type);
+                }
+            });
+
+            buildingButtons.put(type, button);
+
+            buildingPanel.add(button)
+                    .width(280)
+                    .height(38)
+                    .padBottom(5)
+                    .row();
+        }
+
+        expandTerritoryButton = new TextButton(
+                "EXPAND TERRITORY",
+                buildingButtons.get(BuildingType.FARM).getStyle()
+        );
+
+        expandTerritoryButton.addListener(
+                new ChangeListener() {
+
+                    @Override
+                    public void changed(
+                            ChangeEvent event,
+                            Actor actor
+                    ) {
+                        toggleExpansionMode();
+                    }
+                }
+        );
+
+        buildingPanel.add(expandTerritoryButton)
+                .fillX()
+                .padTop(12)
+                .row();
+
+        autoExpansionButton = new TextButton(
+                "AUTOMATE: OFF",
+                buildingButtons.get(
+                        BuildingType.FARM
+                ).getStyle()
+        );
+
+        autoExpansionButton.addListener(
+                new ChangeListener() {
+
+                    @Override
+                    public void changed(
+                            ChangeEvent event,
+                            Actor actor
+                    ) {
+
+                        toggleAutomaticExpansion();
+                    }
+                }
+        );
+
+        buildingPanel.add(autoExpansionButton)
+                .fillX()
+                .padTop(6)
+                .row();
+
+        expansionStatusLabel = new Label(
+                "",
+                new Label.LabelStyle(
+                        font,
+                        Color.WHITE
+                )
+        );
+
+        buildingPanel.add(expansionStatusLabel)
+                .left()
+                .padTop(6)
+                .row();
+
+        buildingStatusLabel = new Label(
+                "Select a building",
+                labelStyle
+        );
+
+        buildingStatusLabel.setWrap(true);
+
+        buildingPanel.add(buildingStatusLabel)
+                .width(280)
+                .left()
+                .padTop(10)
+                .row();
+
+        buildingPanel.setVisible(false);
+
+        // Main UI layout.
         Table root = new Table();
+
         root.setFillParent(true);
         root.top().left();
         root.pad(20);
-        root.setTouchable(Touchable.disabled);
-        root.add(panel).top().left();
+
+        // Important: allow child buttons to receive input.
+        root.setTouchable(Touchable.childrenOnly);
+
+        root.add(infoPanel)
+                .top()
+                .left();
+
         uiStage.addActor(root);
+
+        // Building panel is positioned independently.
+        uiStage.addActor(buildingPanel);
+
+        positionBuildingPanel();
+
     }
+
+    private void positionBuildingPanel() {
+
+        if (buildingPanel == null || uiStage == null) {
+            return;
+        }
+
+        buildingPanel.pack();
+
+        float width =
+                uiStage.getViewport().getWorldWidth();
+
+        float height =
+                uiStage.getViewport().getWorldHeight();
+
+        float x = Math.max(
+                0f,
+                width - buildingPanel.getWidth() - 20f
+        );
+
+        float y = Math.max(
+                0f,
+                height - buildingPanel.getHeight() - 20f
+        );
+
+        buildingPanel.setPosition(x, y);
+    }
+
+
+    // =========================================================================
+    // UI information and city economy
+    // =========================================================================
+
+    private void updateInfoPanel() {
+
+        StringBuilder info = new StringBuilder();
+
+        if (selectedTile == null) {
+
+            info.append("Select a tile to view information");
+
+            Gdx.graphics.setTitle("Epoch Strategy");
+
+        } else {
+
+            info.append("TILE INFORMATION\n\n")
+                    .append("Coordinates: ")
+                    .append(selectedTile.getX())
+                    .append(", ")
+                    .append(selectedTile.getY())
+                    .append('\n')
+                    .append("Terrain: ")
+                    .append(selectedTile.getTerrain())
+                    .append("\nElevation: ")
+                    .append(selectedTile.getElevation())
+                    .append("\nLand passable: ")
+                    .append(
+                            selectedTile.isPassableForLandUnits()
+                                    ? "Yes"
+                                    : "No"
+                    );
+
+            int x = selectedTile.getX();
+            int y = selectedTile.getY();
+            appendTerritoryInfo(info, x, y);
+
+            Optional<RiverProperties> riverOptional =
+                    riverNetwork.findPropertiesAt(x, y);
+
+            if (riverOptional.isPresent()) {
+
+                RiverProperties river = riverOptional.get();
+
+                info.append("\n\nRIVER")
+                        .append("\nType: ").append(river.type())
+                        .append("\nFlow: ").append(river.flow())
+                        .append("\nWidth: ").append(river.width())
+                        .append("\nDepth: ").append(river.depth())
+                        .append("\nCargo barge navigable: ")
+                        .append(river.navigable() ? "Yes" : "No");
+
+                if (drainageMap.hasDrainagePath(x, y)) {
+
+                    info.append("\nCatchment area: ")
+                            .append(
+                                    drainageMap.getCatchmentArea(x, y)
+                            );
+                }
+            }
+
+// CITY INFORMATION
+            Optional<City> cityOptional =
+                    gameState.getCityManager().findCityAt(x, y);
+
+            if (cityOptional.isPresent()) {
+
+                City city = cityOptional.get();
+
+                String civilizationName = city.isNeutral()
+                        ? "Neutral"
+                        : gameState.getCivilizationManager()
+                        .findCivilization(
+                                city.getCivilizationId()
+                        )
+                        .map(civilization ->
+                                civilization.getName()
+                        )
+                        .orElse("Unknown");
+
+                info.append("\n\nCITY INFORMATION")
+                        .append("\nName: ")
+                        .append(city.getName())
+                        .append("\nID: ")
+                        .append(city.getId())
+                        .append("\nCivilization: ")
+                        .append(civilizationName)
+                        .append("\nLevel: ")
+                        .append(city.getLevel())
+                        .append("\nPopulation: ")
+                        .append(city.getPopulation())
+                        .append("/")
+                        .append(
+
+                                CityPopulationService.getPopulationCapacity(
+                                        city,
+                                        gameState.getCityBuildingManager().hasBuilding(
+                                                city.getId(),
+                                                BuildingType.HOUSING
+                                        )
+                                                ? BuildingType.HOUSING
+                                                .getPopulationCapacityBonus()
+                                                : 0
+                                )
+
+                        );
+
+                // Current food storage
+                int storedFood = city.getInventory()
+                        .getAmount(ResourceType.FOOD);
+
+                info.append("\n\nFOOD ECONOMY")
+                        .append("\nStored food: ")
+                        .append(storedFood)
+                        .append("\nStorage: ")
+                        .append(
+                                city.getInventory().getTotalUnits()
+                        )
+                        .append("/")
+                        .append(
+                                city.getInventory().getCapacity()
+                        );
+
+                // Results from the last completed turn
+                CityFoodService.FoodTurnResult lastResult =
+                        gameState.getLastCityFoodResults()
+                                .get(city.getId());
+
+                if (lastResult != null) {
+
+                    info.append("\n\nLAST TURN")
+                            .append("\nProduced: +")
+                            .append(lastResult.producedFood())
+                            .append("\nConsumed: -")
+                            .append(lastResult.consumedFood())
+                            .append("\nRequired: ")
+                            .append(lastResult.requiredFood())
+                            .append("\nMissing food: ")
+                            .append(lastResult.missingFood())
+                            .append("\nPopulation change: ")
+                            .append(
+                                    lastResult.populationChange() >= 0
+                                            ? "+"
+                                            : ""
+                            )
+                            .append(lastResult.populationChange())
+                            .append("\nStatus: ")
+                            .append(
+                                    lastResult.starving()
+                                            ? "STARVING"
+                                            : "FED"
+                            );
+
+                } else {
+
+                    info.append("\n\nLAST TURN")
+                            .append("\nNo economic data yet");
+                }
+
+// RESOURCE ECONOMY
+                info.append("\n\nRESOURCE ECONOMY")
+                        .append("\nWood: ")
+                        .append(
+                                city.getInventory()
+                                        .getAmount(ResourceType.WOOD)
+                        )
+                        .append("\nStone: ")
+                        .append(
+                                city.getInventory()
+                                        .getAmount(ResourceType.STONE)
+                        )
+                        .append("\nIron: ")
+                        .append(
+                                city.getInventory()
+                                        .getAmount(ResourceType.IRON)
+                        );
+
+                var resourceResult =
+                        gameState.getLastCityResourceResults()
+                                .get(city.getId());
+
+                if (resourceResult != null) {
+
+                    info.append("\n\nLAST TURN RESOURCES")
+                            .append("\nWood produced: +")
+                            .append(resourceResult.woodProduced())
+                            .append("\nStone produced: +")
+                            .append(resourceResult.stoneProduced())
+                            .append("\nIron produced: +")
+                            .append(resourceResult.ironProduced())
+                            .append("\nTotal produced: +")
+                            .append(resourceResult.totalProduced());
+
+                } else {
+
+                    info.append("\n\nLAST TURN RESOURCES")
+                            .append("\nNo production data yet");
+                }
+
+            }
+
+            Gdx.graphics.setTitle(
+                    "Epoch Strategy | "
+                            + selectedTile.getTerrain()
+                            + (cityOptional.isPresent()
+                            ? " | " + cityOptional.get().getName()
+                            : "")
+            );
+        }
+
+        info.append("\n\nTURN: ")
+                .append(gameState.getTurnNumber());
+
+        info.append("\nUNITS: ")
+                .append(
+                        gameState.getRiverTransportManager()
+                                .getUnitCount()
+                );
+
+        info.append("\n\nRIVER ROUTING")
+                .append("\nVessel: SMALL_BOAT")
+                .append("\n")
+                .append(riverRouteStatus);
+
+        tileInfoLabel.setText(info.toString());
+
+        updateBuildingPanel();
+    }
+
+    private void appendTerritoryInfo(
+            StringBuilder info,
+            int x,
+            int y
+    ) {
+
+        info.append("\n\nTERRITORY");
+
+        var claimOptional =
+                gameState.getTerritoryManager()
+                        .findClaim(x, y);
+
+        if (claimOptional.isEmpty()) {
+
+            info.append("\nOwner: Unclaimed");
+            return;
+        }
+
+        var claim = claimOptional.get();
+
+        String civilizationName =
+                gameState.getCivilizationManager()
+                        .findCivilization(
+                                claim.civilizationId()
+                        )
+                        .map(civilization ->
+                                civilization.getName()
+                        )
+                        .orElse("Unknown");
+
+        String cityName =
+                gameState.getCityManager()
+                        .findCity(
+                                claim.cityId()
+                        )
+                        .map(city -> city.getName())
+                        .orElse("Unknown");
+
+        info.append("\nOwner: ")
+                .append(civilizationName)
+                .append("\nCity: ")
+                .append(cityName)
+                .append('\n');
+    }
+
+    private void updateBuildingPanel() {
+
+        if (buildingPanel == null) {
+            return;
+        }
+
+        if (selectedTile == null) {
+
+            buildingPanel.setVisible(false);
+            return;
+        }
+
+        var cityOptional =
+                gameState.getCityManager().findCityAt(
+                        selectedTile.getX(),
+                        selectedTile.getY()
+                );
+
+        if (cityOptional.isEmpty()) {
+
+            buildingPanel.setVisible(false);
+            return;
+        }
+
+        City city = cityOptional.get();
+
+        buildingPanel.setVisible(true);
+
+        var inventory = city.getInventory();
+
+        int wood = inventory.getAmount(
+                ResourceType.WOOD
+        );
+
+        int stone = inventory.getAmount(
+                ResourceType.STONE
+        );
+
+        buildingSummaryLabel.setText(
+                city.getName()
+                        + "\nWood: " + wood
+                        + " | Stone: " + stone
+                        + "\nStorage: "
+                        + inventory.getTotalUnits()
+                        + "/"
+                        + inventory.getCapacity()
+        );
+
+        var buildingManager =
+                gameState.getCityBuildingManager();
+
+        for (BuildingType type : BuildingType.values()) {
+
+            TextButton button =
+                    buildingButtons.get(type);
+
+            if (button == null) {
+                continue;
+            }
+
+            boolean alreadyBuilt =
+                    buildingManager.hasBuilding(
+                            city.getId(),
+                            type
+                    );
+
+            boolean canBuild =
+                    buildingManager.canConstruct(
+                            city.getId(),
+                            type,
+                            gameState.getCityManager()
+                    );
+
+            String buttonText =
+                    type.name()
+                            + " | W:"
+                            + type.getWoodCost()
+                            + " S:"
+                            + type.getStoneCost();
+
+            if (alreadyBuilt) {
+                buttonText += " [BUILT]";
+            }
+
+            button.setText(buttonText);
+
+            button.setDisabled(
+                    alreadyBuilt || !canBuild
+            );
+        }
+
+        updateExpansionControls(city);
+
+        buildingStatusLabel.setText(
+                "Choose an available building"
+        );
+
+        positionBuildingPanel();
+    }
+
+    private void constructSelectedBuilding(
+            BuildingType buildingType
+    ) {
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        var cityOptional =
+                gameState.getCityManager().findCityAt(
+                        selectedTile.getX(),
+                        selectedTile.getY()
+                );
+
+        if (cityOptional.isEmpty()) {
+            return;
+        }
+
+        City city = cityOptional.get();
+
+        var buildingManager =
+                gameState.getCityBuildingManager();
+
+        if (!buildingManager.canConstruct(
+                city.getId(),
+                buildingType,
+                gameState.getCityManager()
+        )) {
+
+            updateBuildingPanel();
+
+            buildingStatusLabel.setText(
+                    "Not enough resources or already built"
+            );
+
+            return;
+        }
+
+        try {
+
+            buildingManager.construct(
+                    city.getId(),
+                    buildingType,
+                    gameState.getCityManager()
+            );
+
+            cityBuildingRenderer.refresh(
+                    gameState.getCityManager().getCities(),
+                    gameState.getCityBuildingManager()
+            );
+
+            // Refresh all city information.
+            updateInfoPanel();
+
+            buildingStatusLabel.setText(
+                    "Built: " + buildingType.name()
+            );
+
+            System.out.println(
+                    "Constructed " + buildingType
+                            + " in " + city.getName()
+            );
+
+        } catch (IllegalArgumentException
+                 | IllegalStateException exception) {
+
+            updateBuildingPanel();
+
+            buildingStatusLabel.setText(
+                    "Construction failed: "
+                            + exception.getMessage()
+            );
+        }
+    }
+
+
+    // =========================================================================
+    // City territorial expansion
+    // =========================================================================
+
+    private long getCityTerritorySize(long cityId) {
+
+        return gameState.getTerritoryManager()
+                .getClaims()
+                .stream()
+                .filter(claim -> claim.cityId() == cityId)
+                .count();
+    }
+
+    private void updateExpansionControls(
+            City city
+    ) {
+
+        if (expandTerritoryButton == null
+                || autoExpansionButton == null
+                || expansionStatusLabel == null) {
+            return;
+        }
+
+        var influence =
+                gameState.getCityInfluenceManager();
+
+        var expansionManager =
+                gameState.getCityExpansionManager();
+
+        long cityId = city.getId();
+
+        double balance = influence.getBalance(cityId);
+        double cost = influence.getNextExpansionCost(cityId);
+        double income = influence.getIncome(city);
+
+        boolean automatic =
+                expansionManager.isAutomatic(cityId);
+
+        boolean active =
+                expansionCityId != null
+                        && expansionCityId == cityId;
+
+        autoExpansionButton.setText(
+                automatic
+                        ? "AUTOMATE: ON"
+                        : "AUTOMATE: OFF"
+        );
+
+        autoExpansionButton.setDisabled(
+                city.getCivilizationId() == null
+        );
+
+        if (active) {
+
+            expandTerritoryButton.setText(
+                    "CANCEL EXPANSION"
+            );
+
+            expandTerritoryButton.setDisabled(false);
+
+            expansionStatusLabel.setText(
+                    "Click a GREEN tile\nESC to cancel"
+            );
+
+            return;
+        }
+
+        boolean hasCandidates =
+                !expansionService.getEligibleTiles(
+                        city,
+                        worldMap,
+                        gameState.getCityManager(),
+                        gameState.getTerritoryManager()
+                ).isEmpty();
+
+        expandTerritoryButton.setText(
+                "EXPAND TERRITORY"
+        );
+
+        // Manual expansion is unavailable
+        // while automation is enabled.
+        expandTerritoryButton.setDisabled(
+                automatic
+                        || !influence.hasEnoughInfluence(cityId)
+                        || !hasCandidates
+        );
+
+        long territorySize = getCityTerritorySize(cityId);
+
+        int maxTerritorySize =
+                (TerritoryExpansionConfig.MAX_RADIUS * 2 + 1)
+                        * (TerritoryExpansionConfig.MAX_RADIUS * 2 + 1);
+
+        int progress = cost <= 0
+                ? 100
+                : (int) Math.min(
+                100,
+                (balance / cost) * 100
+        );
+
+        String turnsRemaining;
+
+        if (!hasCandidates) {
+
+            turnsRemaining = "No available tiles";
+
+        } else if (balance >= cost) {
+
+            turnsRemaining = automatic
+                    ? "Expansion on next turn"
+                    : "Expansion available!";
+
+        } else if (income > 0) {
+
+            long turns = (long) Math.ceil(
+                    (cost - balance) / income
+            );
+
+            turnsRemaining = "Estimated: "
+                    + turns
+                    + " turns";
+
+        } else {
+
+            turnsRemaining = "No Influence production";
+        }
+
+        String status = String.format(
+                Locale.US,
+                "TERRITORIAL DEVELOPMENT\n"
+                        + "------------------------\n"
+                        + "Influence: %.1f / %.0f\n"
+                        + "Income: +%.1f / turn\n"
+                        + "Progress: %d%%\n"
+                        + "Controlled tiles: %d / %d\n"
+                        + "Next expansion: #%d\n"
+                        + "Mode: %s\n"
+                        + "%s",
+                balance,
+                cost,
+                income,
+                progress,
+                territorySize,
+                maxTerritorySize,
+                influence.getPurchasedExpansions(cityId) + 1,
+                automatic ? "AUTOMATIC" : "MANUAL",
+                turnsRemaining
+        );
+
+        expansionStatusLabel.setText(status);
+    }
+
+    private void toggleExpansionMode() {
+
+        if (expansionCityId != null) {
+            cancelExpansionMode();
+            return;
+        }
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        var cityOptional =
+                gameState.getCityManager().findCityAt(
+                        selectedTile.getX(),
+                        selectedTile.getY()
+                );
+
+        if (cityOptional.isEmpty()) {
+            return;
+        }
+
+        City city = cityOptional.get();
+
+        if (!gameState.getCityInfluenceManager()
+                .hasEnoughInfluence(city.getId())) {
+            return;
+        }
+
+        if (gameState.getCityExpansionManager()
+                .isAutomatic(city.getId())) {
+            return;
+        }
+
+        var eligibleTiles =
+                expansionService.getEligibleTiles(
+                        city,
+                        worldMap,
+                        gameState.getCityManager(),
+                        gameState.getTerritoryManager()
+                );
+
+        if (eligibleTiles.isEmpty()) {
+            return;
+        }
+
+        expansionCityId = city.getId();
+
+        updateExpansionOutlines();
+        updateInfoPanel();
+    }
+
+    private void cancelExpansionMode() {
+
+        expansionCityId = null;
+        expansionOutlines.clear();
+
+        updateInfoPanel();
+    }
+
+    private void handleExpansionClick(
+            int screenX,
+            int screenY
+    ) {
+
+        if (expansionCityId == null) {
+            return;
+        }
+
+        Long cityId = expansionCityId;
+
+        City city = gameState.getCityManager()
+                .findCity(cityId)
+                .orElse(null);
+
+        if (city == null) {
+            cancelExpansionMode();
+            return;
+        }
+
+        // Keep the city selected while picking a target.
+        Tile previousSelection = selectedTile;
+
+        selectTile(screenX, screenY);
+
+        Tile targetTile = selectedTile;
+
+        selectedTile = previousSelection;
+        updateSelectionOutline();
+
+        if (targetTile == null) {
+            updateInfoPanel();
+            return;
+        }
+
+        try {
+
+            expansionService.expand(
+                    city,
+                    targetTile.getX(),
+                    targetTile.getY(),
+                    worldMap,
+                    gameState.getCityManager(),
+                    gameState.getTerritoryManager(),
+                    gameState.getCityInfluenceManager()
+            );
+
+        } catch (
+                IllegalArgumentException
+                | IllegalStateException exception
+        ) {
+
+            Gdx.app.log(
+                    "TERRITORY",
+                    exception.getMessage()
+            );
+
+            updateInfoPanel();
+            return;
+        }
+
+        // The expansion was successful.
+        expansionCityId = null;
+        expansionOutlines.clear();
+
+        // Immediately rebuild civilization borders.
+        territoryBorderRenderer.refresh(
+                gameState.getTerritoryManager(),
+                gameState.getCivilizationManager()
+        );
+
+        Gdx.app.log(
+                "TERRITORY",
+                city.getName()
+                        + " expanded to "
+                        + targetTile.getX()
+                        + ", "
+                        + targetTile.getY()
+        );
+
+        updateInfoPanel();
+    }
+
+    private void toggleAutomaticExpansion() {
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        var cityOptional =
+                gameState.getCityManager()
+                        .findCityAt(
+                                selectedTile.getX(),
+                                selectedTile.getY()
+                        );
+
+        if (cityOptional.isEmpty()) {
+            return;
+        }
+
+        City city = cityOptional.get();
+
+        if (city.getCivilizationId() == null) {
+            return;
+        }
+
+        var expansionManager =
+                gameState.getCityExpansionManager();
+
+        expansionManager.toggleMode(
+                city.getId()
+        );
+
+        // If automation was enabled while manual
+        // tile selection was active, cancel selection.
+        if (expansionManager.isAutomatic(city.getId())
+                && expansionCityId != null
+                && expansionCityId == city.getId()) {
+
+            expansionCityId = null;
+            expansionOutlines.clear();
+        }
+
+        updateInfoPanel();
+    }
+
+    private void updateExpansionOutlines() {
+
+        expansionOutlines.clear();
+
+        if (expansionCityId == null) {
+            return;
+        }
+
+        City city = gameState.getCityManager()
+                .findCity(expansionCityId)
+                .orElse(null);
+
+        if (city == null) {
+            return;
+        }
+
+        var eligibleTiles =
+                expansionService.getEligibleTiles(
+                        city,
+                        worldMap,
+                        gameState.getCityManager(),
+                        gameState.getTerritoryManager()
+                );
+
+        for (var position : eligibleTiles) {
+
+            Tile tile = worldMap.getTile(
+                    position.x(),
+                    position.y()
+            );
+
+            Vector3[] vertices =
+                    TerrainMeshBuilder.getTileVertices(
+                            worldMap,
+                            tile
+                    );
+
+            for (int i = 0; i < 4; i++) {
+
+                Vector3 start = new Vector3(
+                        vertices[i]
+                ).add(0f, 0.12f, 0f);
+
+                Vector3 end = new Vector3(
+                        vertices[(i + 1) % 4]
+                ).add(0f, 0.12f, 0f);
+
+                addExpansionOutlineEdge(
+                        start,
+                        end
+                );
+            }
+        }
+    }
+
+    private void addExpansionOutlineEdge(
+            Vector3 start,
+            Vector3 end
+    ) {
+
+        Vector3 direction =
+                new Vector3(end).sub(start);
+
+        float length = direction.len();
+
+        if (length < 0.0001f) {
+            return;
+        }
+
+        direction.nor();
+
+        Vector3 midpoint =
+                new Vector3(start)
+                        .add(end)
+                        .scl(0.5f);
+
+        Quaternion rotation =
+                new Quaternion()
+                        .setFromCross(
+                                Vector3.Y,
+                                direction
+                        );
+
+        ModelInstance instance =
+                new ModelInstance(selectionEdgeModel);
+
+        instance.transform.set(
+                midpoint,
+                rotation,
+                new Vector3(
+                        0.075f,
+                        length,
+                        0.075f
+                )
+        );
+
+        instance.materials.first().set(
+                ColorAttribute.createDiffuse(
+                        new Color(
+                                0.15f,
+                                0.95f,
+                                0.30f,
+                                1f
+                        )
+                )
+        );
+
+        expansionOutlines.add(instance);
+    }
+
+
+    // =========================================================================
+    // Input and tile selection
+    // =========================================================================
 
     private void setupInput() {
         cameraController = new CameraInputController(camera);
@@ -339,6 +1729,16 @@ public class EpochGame extends ApplicationAdapter {
 
                 if (button != Input.Buttons.LEFT) {
                     return false;
+                }
+
+                if (expansionCityId != null) {
+
+                    handleExpansionClick(
+                            screenX,
+                            screenY
+                    );
+
+                    return true;
                 }
 
                 selectTile(screenX, screenY);
@@ -360,13 +1760,26 @@ public class EpochGame extends ApplicationAdapter {
                     advanceGameTurn();
                     return true;
                 }
+
+                if (keycode == Input.Keys.ESCAPE
+                        && expansionCityId != null) {
+
+                    cancelExpansionMode();
+                    return true;
+                }
+
                 return false;
+
             }
         };
 
-        Gdx.input.setInputProcessor(new InputMultiplexer(
-                tileInput, cameraController
-        ));
+        Gdx.input.setInputProcessor(
+                new InputMultiplexer(
+                        uiStage,
+                        tileInput,
+                        cameraController
+                )
+        );
     }
 
     private void selectTile(int screenX, int screenY) {
@@ -412,8 +1825,47 @@ public class EpochGame extends ApplicationAdapter {
         updateInfoPanel();
     }
 
+    private void updateSelectionOutline() {
+        selectionOutline.clear();
+        if (selectedTile == null) {
+            return;
+        }
+
+        Vector3[] vertices = TerrainMeshBuilder.getTileVertices(
+                worldMap, selectedTile
+        );
+        for (int i = 0; i < 4; i++) {
+            Vector3 start = new Vector3(vertices[i]).add(0f, 0.035f, 0f);
+            Vector3 end = new Vector3(vertices[(i + 1) % 4])
+                    .add(0f, 0.035f, 0f);
+            addOutlineEdge(start, end);
+        }
+    }
+
+    private void addOutlineEdge(Vector3 start, Vector3 end) {
+        Vector3 direction = new Vector3(end).sub(start);
+        float length = direction.len();
+        if (length < 0.0001f) {
+            return;
+        }
+        direction.nor();
+
+        Vector3 midpoint = new Vector3(start).add(end).scl(0.5f);
+        Quaternion rotation = new Quaternion()
+                .setFromCross(Vector3.Y, direction);
+        ModelInstance instance = new ModelInstance(selectionEdgeModel);
+        instance.transform.set(
+                midpoint,
+                rotation,
+                new Vector3(0.03f, length, 0.03f)
+        );
+        selectionOutline.add(instance);
+    }
 
 
+    // =========================================================================
+    // River routes and transport
+    // =========================================================================
 
     private void selectRiverRoutePoint() {
 
@@ -582,7 +2034,6 @@ public class EpochGame extends ApplicationAdapter {
                 route
         );
 
-
         // Update information panel.
         riverRouteStatus =
                 "Created waterway unit #" + unitId
@@ -635,9 +2086,6 @@ public class EpochGame extends ApplicationAdapter {
         updateInfoPanel();
     }
 
-
-
-
     private void selectTransportUnitAtSelectedTile() {
         if (selectedTile == null) {
             return;
@@ -672,9 +2120,31 @@ public class EpochGame extends ApplicationAdapter {
     }
 
     private void advanceGameTurn() {
+
+        int claimedTilesBefore =
+                gameState.getTerritoryManager()
+                        .getClaimedTileCount();
+
         GameEngine.TurnReport report = gameEngine.endTurn();
         RiverTransportManager manager =
                 gameState.getRiverTransportManager();
+
+        int claimedTilesAfter =
+                gameState.getTerritoryManager()
+                        .getClaimedTileCount();
+
+        if (claimedTilesAfter != claimedTilesBefore) {
+
+            territoryBorderRenderer.refresh(
+                    gameState.getTerritoryManager(),
+                    gameState.getCivilizationManager()
+            );
+
+            Gdx.app.log(
+                    "TERRITORY",
+                    "Borders updated after automatic expansion"
+            );
+        }
 
         riverTransportRenderer.updateUnits(manager);
         int movedUnits = 0;
@@ -744,105 +2214,10 @@ public class EpochGame extends ApplicationAdapter {
         updateInfoPanel();
     }
 
-    private void updateSelectionOutline() {
-        selectionOutline.clear();
-        if (selectedTile == null) {
-            return;
-        }
 
-        Vector3[] vertices = TerrainMeshBuilder.getTileVertices(
-                worldMap, selectedTile
-        );
-        for (int i = 0; i < 4; i++) {
-            Vector3 start = new Vector3(vertices[i]).add(0f, 0.035f, 0f);
-            Vector3 end = new Vector3(vertices[(i + 1) % 4])
-                    .add(0f, 0.035f, 0f);
-            addOutlineEdge(start, end);
-        }
-    }
-
-    private void addOutlineEdge(Vector3 start, Vector3 end) {
-        Vector3 direction = new Vector3(end).sub(start);
-        float length = direction.len();
-        if (length < 0.0001f) {
-            return;
-        }
-        direction.nor();
-
-        Vector3 midpoint = new Vector3(start).add(end).scl(0.5f);
-        Quaternion rotation = new Quaternion()
-                .setFromCross(Vector3.Y, direction);
-        ModelInstance instance = new ModelInstance(selectionEdgeModel);
-        instance.transform.set(
-                midpoint,
-                rotation,
-                new Vector3(0.03f, length, 0.03f)
-        );
-        selectionOutline.add(instance);
-    }
-
-    private void updateInfoPanel() {
-        StringBuilder info = new StringBuilder();
-
-        if (selectedTile == null) {
-            info.append("Select a tile to view information");
-            Gdx.graphics.setTitle("Epoch Strategy");
-        } else {
-            info.append("TILE INFORMATION\n\n")
-                    .append("Coordinates: ")
-                    .append(selectedTile.getX()).append(", ")
-                    .append(selectedTile.getY()).append('\n')
-                    .append("Terrain: ").append(selectedTile.getTerrain())
-                    .append("\nElevation: ").append(selectedTile.getElevation())
-                    .append("\nLand passable: ")
-                    .append(selectedTile.isPassableForLandUnits()
-                            ? "Yes" : "No");
-
-            int x = selectedTile.getX();
-            int y = selectedTile.getY();
-            Optional<RiverProperties> riverOptional =
-                    riverNetwork.findPropertiesAt(x, y);
-
-            if (riverOptional.isPresent()) {
-                RiverProperties river = riverOptional.get();
-
-                if (river != null) {
-                    info.append("\n\nRIVER")
-                            .append("\nType: ").append(river.type())
-                            .append("\nFlow: ").append(river.flow())
-                            .append("\nWidth: ").append(river.width())
-                            .append("\nDepth: ").append(river.depth())
-                            .append("\nCargo barge navigable: ")
-                            .append(river.navigable() ? "Yes" : "No");
-                }
-
-                if (drainageMap.hasDrainagePath(x, y)) {
-                    info.append("\nCatchment area: ")
-                            .append(drainageMap.getCatchmentArea(x, y));
-                }
-
-                Gdx.graphics.setTitle(
-                        "Epoch Strategy | " + selectedTile.getTerrain()
-                );
-            }
-        }
-
-        info.append("\n\nTURN: ").append(gameState.getTurnNumber());
-        info.append("\nUNITS: ")
-                .append(gameState.getRiverTransportManager().getUnitCount());
-        info.append("\n\nRIVER ROUTING\nVessel: SMALL_BOAT\n")
-                .append(riverRouteStatus);
-
-        tileInfoLabel.setText(info.toString());
-    }
-
-    private float getWorldX(int tileX) {
-        return tileX - (worldMap.getWidth() - 1) / 2f;
-    }
-
-    private float getWorldZ(int tileY) {
-        return tileY - (worldMap.getHeight() - 1) / 2f;
-    }
+    // =========================================================================
+    // Application lifecycle: drawing and cleanup
+    // =========================================================================
 
     @Override
     public void render() {
@@ -855,9 +2230,12 @@ public class EpochGame extends ApplicationAdapter {
         modelBatch.begin(camera);
         terrainChunkManager.render(camera, modelBatch, environment);
         riverRenderer.render(modelBatch, environment);
-        modelBatch.render(tiles, environment);
+        cityRenderer.render(modelBatch, environment);
+        cityBuildingRenderer.render(modelBatch, environment);
+        modelBatch.render(expansionOutlines, environment);
         riverRouteRenderer.render(modelBatch, environment);
         riverTransportRenderer.render(modelBatch, environment);
+        territoryBorderRenderer.render(modelBatch, environment);
         modelBatch.render(selectionOutline, environment);
         modelBatch.end();
 
@@ -868,10 +2246,18 @@ public class EpochGame extends ApplicationAdapter {
 
     @Override
     public void resize(int width, int height) {
+
         camera.viewportWidth = width;
         camera.viewportHeight = height;
         camera.update();
-        uiStage.getViewport().update(width, height, true);
+
+        uiStage.getViewport().update(
+                width,
+                height,
+                true
+        );
+
+        positionBuildingPanel();
     }
 
     @Override
@@ -891,6 +2277,10 @@ public class EpochGame extends ApplicationAdapter {
         for (Model model : models) {
             model.dispose();
         }
+
+        if (territoryBorderRenderer != null) {
+            territoryBorderRenderer.dispose();
+        }
         if (modelBatch != null) {
             modelBatch.dispose();
         }
@@ -903,5 +2293,21 @@ public class EpochGame extends ApplicationAdapter {
         if (panelTexture != null) {
             panelTexture.dispose();
         }
+        if (cityRenderer != null) {
+            cityRenderer.dispose();
+        }
+        if (buttonTexture != null) {
+            buttonTexture.dispose();
+        }
+
+        if (buttonHoverTexture != null) {
+            buttonHoverTexture.dispose();
+        }
+
+        if (cityBuildingRenderer != null) {
+            cityBuildingRenderer.dispose();
+        }
+
     }
+
 }

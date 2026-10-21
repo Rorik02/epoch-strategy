@@ -7,7 +7,7 @@ import java.util.Objects;
 
 public final class ResourceInventory {
 
-    private final int capacity;
+    private int capacity;
 
     private final EnumMap<ResourceType, Integer> resources =
             new EnumMap<>(ResourceType.class);
@@ -118,6 +118,25 @@ public final class ResourceInventory {
 
         return resources.getOrDefault(type, 0);
     }
+
+
+    public void increaseCapacity(int amount) {
+
+        if (amount <= 0) {
+            throw new IllegalArgumentException(
+                    "Capacity increase must be positive"
+            );
+        }
+
+        if (amount > Integer.MAX_VALUE - capacity) {
+            throw new IllegalArgumentException(
+                    "Inventory capacity overflow"
+            );
+        }
+
+        capacity += amount;
+    }
+
 
     public int getTotalUnits() {
         return totalUnits;
