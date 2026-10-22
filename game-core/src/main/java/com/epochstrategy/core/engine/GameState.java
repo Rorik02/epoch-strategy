@@ -12,6 +12,9 @@ import com.epochstrategy.core.building.CityBuildingManager;
 import com.epochstrategy.core.territory.TerritoryManager;
 import com.epochstrategy.core.territory.CityInfluenceManager;
 import com.epochstrategy.core.territory.CityExpansionManager;
+import com.epochstrategy.core.civilization.PlayerCivilizationManager;
+import com.epochstrategy.core.unit.LandUnitManager;
+import com.epochstrategy.core.city.CityFoundingSettings;
 
 public class GameState {
 
@@ -43,8 +46,19 @@ public class GameState {
     private final CityInfluenceManager cityInfluenceManager =
             new CityInfluenceManager();
 
+    private final PlayerCivilizationManager playerCivilizationManager =
+            new PlayerCivilizationManager();
+
     private final CityExpansionManager cityExpansionManager =
             new CityExpansionManager();
+
+    private final LandUnitManager landUnitManager =
+            new LandUnitManager();
+
+    private final CityFoundingSettings cityFoundingSettings =
+            new CityFoundingSettings();
+
+
     public int getTurnNumber() {
         return turnNumber;
     }
@@ -117,6 +131,18 @@ public class GameState {
 
     public CityExpansionManager getCityExpansionManager() {
         return cityExpansionManager;
+    }
+
+    public PlayerCivilizationManager getPlayerCivilizationManager() {
+        return playerCivilizationManager;
+    }
+
+    public LandUnitManager getLandUnitManager() {
+        return landUnitManager;
+    }
+
+    public CityFoundingSettings getCityFoundingSettings() {
+        return cityFoundingSettings;
     }
 
 }

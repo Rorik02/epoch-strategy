@@ -76,6 +76,13 @@ import com.epochstrategy.desktop.renderer.RiverTransportFleetRenderer;
 import com.epochstrategy.desktop.renderer.TerrainChunkManager;
 import com.epochstrategy.desktop.renderer.TerrainMeshBuilder;
 import com.epochstrategy.desktop.renderer.TerritoryBorderRenderer;
+import com.epochstrategy.core.civilization.Civilization;
+import com.epochstrategy.core.territory.CityExpansionMode;
+import com.epochstrategy.desktop.renderer.SettlerRenderer;
+import com.epochstrategy.core.unit.LandUnit;
+import com.epochstrategy.core.unit.LandMovementService;
+import com.epochstrategy.core.unit.SettlerRecruitmentConfig;
+import com.epochstrategy.core.unit.SettlerRecruitmentService;
 
 import java.util.EnumMap;
 import java.util.HashMap;
@@ -83,6 +90,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
+import java.util.Comparator;
 
 /** Desktop UI and rendering. All authoritative turn and cargo state live in game-core. */
 public class EpochGame extends ApplicationAdapter {
@@ -107,6 +115,7 @@ public class EpochGame extends ApplicationAdapter {
     private GameState gameState;
     private GameEngine gameEngine;
 
+
     // Camera and rendering
 
     private PerspectiveCamera camera;
@@ -120,10 +129,12 @@ public class EpochGame extends ApplicationAdapter {
     private CityRenderer cityRenderer;
     private CityBuildingRenderer cityBuildingRenderer;
     private TerritoryBorderRenderer territoryBorderRenderer;
+    private SettlerRenderer settlerRenderer;
 
     private final Array<Model> models = new Array<>();
     private final Array<ModelInstance> tiles = new Array<>();
     private final Array<ModelInstance> selectionOutline = new Array<>();
+    private final Array<ModelInstance> movementOutlines = new Array<>();
     private Model selectionEdgeModel;
     private Tile selectedTile;
 
@@ -136,8 +147,18 @@ public class EpochGame extends ApplicationAdapter {
     private final Map<Long, WaterwayFastestRouteFinder.WaterwayRoute>
             riverRoutesByUnit = new HashMap<>();
 
+    private final LandMovementService landMovementService =
+            new LandMovementService();
+
     private final Map<Long, ResourceInventory> demoDestinationsByUnit =
             new HashMap<>();
+
+
+    private final SettlerRecruitmentService settlerRecruitmentService =
+            new SettlerRecruitmentService();
+
+    private TextButton trainSettlerButton;
+    private Label settlerRecruitmentStatusLabel;
 
     private String riverRouteStatus =
             "Shift + Left Click: select river route start";
@@ -153,9 +174,20 @@ public class EpochGame extends ApplicationAdapter {
     private Table buildingPanel;
     private Label buildingSummaryLabel;
     private Label buildingStatusLabel;
+    private Long movingLandUnitId;
+    private TextButton foundCityButton;
+    private Label cityFoundingStatusLabel;
+
+    private Table landUnitPanel;
+    private Label landUnitSummaryLabel;
+    private TextButton moveLandUnitButton;
 
     private final EnumMap<BuildingType, TextButton> buildingButtons =
             new EnumMap<>(BuildingType.class);
+
+    private final CityGenerator.CityFoundingService cityFoundingService =
+            new CityGenerator.CityFoundingService();
+
 
     // UI: territorial expansion
 
@@ -224,6 +256,129 @@ public class EpochGame extends ApplicationAdapter {
                 gameState.getCivilizationManager(),
                 gameState.getCityManager()
         );
+
+
+// Temporary player civilization selection.
+// Later this will be handled by the new game menu.
+
+        var civilizations =
+                gameState.getCivilizationManager()
+                        .getCivilizations();
+
+        Civilization playerCivilization =
+                civilizations.stream()
+                        .filter(civilization ->
+                                civilization.getName()
+                                        .equalsIgnoreCase("Rome")
+                        )
+                        .findFirst()
+                        .orElseGet(() ->
+                                civilizations.stream()
+                                        .min(
+                                                Comparator.comparingLong(
+                                                        Civilization::getId
+                                                )
+                                        )
+                                        .orElseThrow(
+                                                () -> new IllegalStateException(
+                                                        "No civilizations available"
+                                                )
+                                        )
+                        );
+
+        gameState.getPlayerCivilizationManager()
+                .selectCivilization(
+                        playerCivilization.getId(),
+                        gameState.getCivilizationManager()
+                );
+
+
+// Create the first settler for the player.
+
+        long playerCivilizationId =
+                gameState.getPlayerCivilizationManager()
+                        .getPlayerCivilizationId()
+                        .orElseThrow();
+
+        City startingCity =
+                gameState.getCityManager()
+                        .getCitiesByCivilization(
+                                playerCivilizationId
+                        )
+                        .stream()
+                        .filter(city ->
+                                worldMap.getTile(
+                                        city.getX(),
+                                        city.getY()
+                                ).isPassableForLandUnits()
+                        )
+                        .min(
+                                Comparator.comparingLong(City::getId)
+                        )
+                        .orElseThrow(
+                                () -> new IllegalStateException(
+                                        "Player has no valid starting city"
+                                )
+                        );
+
+
+        int[] settlerPosition =
+                findSettlerSpawnTile(startingCity);
+
+        LandUnit startingSettler =
+                gameState.getLandUnitManager()
+                        .createSettler(
+                                playerCivilizationId,
+                                settlerPosition[0],
+                                settlerPosition[1],
+                                worldMap,
+                                gameState.getCivilizationManager()
+                        );
+
+
+        System.out.println(
+                "STARTING SETTLER"
+                        + " | ID: " + startingSettler.getId()
+                        + " | Civilization: "
+                        + startingSettler.getCivilizationId()
+                        + " | Position: "
+                        + startingSettler.getX()
+                        + ", "
+                        + startingSettler.getY()
+        );
+
+
+        System.out.println(
+                "PLAYER CIVILIZATION: "
+                        + playerCivilization.getName()
+        );
+
+
+
+        // Enable territorial automation for AI cities.
+        // Other AI behaviors will be implemented later.
+
+        for (City city :
+                gameState.getCityManager().getCities()) {
+
+            if (city.isNeutral()) {
+                continue;
+            }
+
+            boolean playerCity =
+                    gameState.getPlayerCivilizationManager()
+                            .controlsCity(city);
+
+            if (!playerCity) {
+
+                gameState.getCityExpansionManager()
+                        .setMode(
+                                city.getId(),
+                                CityExpansionMode.AUTOMATIC
+                        );
+            }
+        }
+
 
         TerritoryGenerator territoryGenerator =
                 new TerritoryGenerator(
@@ -334,6 +489,16 @@ public class EpochGame extends ApplicationAdapter {
         riverTransportRenderer = new RiverTransportFleetRenderer(worldMap);
 
         cityRenderer = new CityRenderer(worldMap);
+
+
+        settlerRenderer =
+                new SettlerRenderer(worldMap);
+
+        settlerRenderer.refresh(
+                gameState.getLandUnitManager().getUnits(),
+                gameState.getCivilizationManager()
+        );
+
 
         cityRenderer.setCities(
                 gameState.getCityManager().getCities(),
@@ -686,6 +851,51 @@ public class EpochGame extends ApplicationAdapter {
                     .row();
         }
 
+
+// SETTLER RECRUITMENT
+
+        trainSettlerButton = new TextButton(
+                "TRAIN SETTLER",
+                buttonStyle
+        );
+
+        trainSettlerButton.addListener(
+                new ChangeListener() {
+
+                    @Override
+                    public void changed(
+                            ChangeEvent event,
+                            Actor actor
+                    ) {
+
+                        if (!trainSettlerButton.isDisabled()) {
+                            trainSettlerInSelectedCity();
+                        }
+                    }
+                }
+        );
+
+        buildingPanel.add(trainSettlerButton)
+                .width(280)
+                .height(38)
+                .padTop(12)
+                .row();
+
+        settlerRecruitmentStatusLabel = new Label(
+                "",
+                labelStyle
+        );
+
+        settlerRecruitmentStatusLabel.setWrap(true);
+
+        buildingPanel.add(settlerRecruitmentStatusLabel)
+                .width(280)
+                .left()
+                .padTop(6)
+                .padBottom(8)
+                .row();
+
+
         expandTerritoryButton = new TextButton(
                 "EXPAND TERRITORY",
                 buildingButtons.get(BuildingType.FARM).getStyle()
@@ -763,6 +973,104 @@ public class EpochGame extends ApplicationAdapter {
 
         buildingPanel.setVisible(false);
 
+
+// LAND UNIT PANEL
+
+        landUnitPanel = new Table();
+        landUnitPanel.setBackground(panelDrawable);
+        landUnitPanel.pad(12);
+
+        Label unitTitle = new Label(
+                "LAND UNIT",
+                labelStyle
+        );
+
+        landUnitPanel.add(unitTitle)
+                .left()
+                .padBottom(10)
+                .row();
+
+        landUnitSummaryLabel = new Label(
+                "",
+                labelStyle
+        );
+
+        landUnitPanel.add(landUnitSummaryLabel)
+                .left()
+                .padBottom(10)
+                .row();
+
+        moveLandUnitButton = new TextButton(
+                "MOVE UNIT",
+                buttonStyle
+        );
+
+        moveLandUnitButton.addListener(
+                new ChangeListener() {
+
+                    @Override
+                    public void changed(
+                            ChangeEvent event,
+                            Actor actor
+                    ) {
+
+                        if (!moveLandUnitButton.isDisabled()) {
+                            toggleLandUnitMoveMode();
+                        }
+                    }
+                }
+        );
+
+        landUnitPanel.add(moveLandUnitButton)
+                .width(280)
+                .height(38)
+                .row();
+
+
+        foundCityButton = new TextButton(
+                "FOUND CITY",
+                buttonStyle
+        );
+
+        foundCityButton.addListener(
+                new ChangeListener() {
+
+                    @Override
+                    public void changed(
+                            ChangeEvent event,
+                            Actor actor
+                    ) {
+
+                        if (!foundCityButton.isDisabled()) {
+                            foundCityWithSelectedSettler();
+                        }
+                    }
+                }
+        );
+
+        landUnitPanel.add(foundCityButton)
+                .width(280)
+                .height(38)
+                .padTop(6)
+                .row();
+
+        cityFoundingStatusLabel = new Label(
+                "",
+                labelStyle
+        );
+
+        cityFoundingStatusLabel.setWrap(true);
+
+        landUnitPanel.add(cityFoundingStatusLabel)
+                .width(280)
+                .left()
+                .padTop(8)
+                .row();
+
+
+        landUnitPanel.setVisible(false);
+
+
         // Main UI layout.
         Table root = new Table();
 
@@ -781,9 +1089,17 @@ public class EpochGame extends ApplicationAdapter {
 
         // Building panel is positioned independently.
         uiStage.addActor(buildingPanel);
+        uiStage.addActor(landUnitPanel);
 
         positionBuildingPanel();
+        positionLandUnitPanel();
 
+    }
+
+    private boolean isPlayerCity(City city) {
+
+        return gameState.getPlayerCivilizationManager()
+                .controlsCity(city);
     }
 
     private void positionBuildingPanel() {
@@ -812,6 +1128,131 @@ public class EpochGame extends ApplicationAdapter {
 
         buildingPanel.setPosition(x, y);
     }
+
+
+    private void positionLandUnitPanel() {
+
+        if (landUnitPanel == null || uiStage == null) {
+            return;
+        }
+
+        landUnitPanel.pack();
+
+        float width =
+                uiStage.getViewport().getWorldWidth();
+
+        float x = Math.max(
+                0f,
+                width - landUnitPanel.getWidth() - 20f
+        );
+
+        landUnitPanel.setPosition(x, 20f);
+    }
+
+
+    private void updateLandUnitPanel() {
+
+        if (landUnitPanel == null) {
+            return;
+        }
+
+        if (selectedTile == null) {
+            landUnitPanel.setVisible(false);
+            return;
+        }
+
+        LandUnit unit =
+                gameState.getLandUnitManager()
+                        .findUnitAt(
+                                selectedTile.getX(),
+                                selectedTile.getY()
+                        )
+                        .orElse(null);
+
+        if (unit == null) {
+            landUnitPanel.setVisible(false);
+            return;
+        }
+
+        boolean playerUnit =
+                gameState.getPlayerCivilizationManager()
+                        .isPlayerCivilization(
+                                unit.getCivilizationId()
+                        );
+
+        if (!playerUnit) {
+            landUnitPanel.setVisible(false);
+            return;
+        }
+
+        landUnitPanel.setVisible(true);
+
+        boolean active =
+                movingLandUnitId != null
+                        && movingLandUnitId.equals(
+                        unit.getId()
+                );
+
+        landUnitSummaryLabel.setText(
+                "Type: " + unit.getType()
+                        + "\nUnit ID: " + unit.getId()
+                        + "\nPosition: "
+                        + unit.getX()
+                        + ", "
+                        + unit.getY()
+                        + "\nMovement: "
+                        + unit.getMovementPoints()
+                        + "/"
+                        + unit.getMaxMovementPoints()
+                        + (active
+                        ? "\nSelect a highlighted tile"
+                        : "")
+        );
+
+        moveLandUnitButton.setText(
+                active ? "CANCEL MOVE" : "MOVE UNIT"
+        );
+
+        boolean hasReachableTiles =
+                !landMovementService.getReachableTiles(
+                        unit.getId(),
+                        worldMap,
+                        gameState.getLandUnitManager()
+                ).isEmpty();
+
+        moveLandUnitButton.setDisabled(
+                !active && !hasReachableTiles
+        );
+
+
+        var foundingCheck =
+                cityFoundingService.checkFounding(
+                        unit,
+                        gameState,
+                        worldMap
+                );
+
+        foundCityButton.setDisabled(
+                !foundingCheck.allowed()
+        );
+
+
+        String distanceInfo =
+                getNearestCityDistanceInfo(unit);
+
+        cityFoundingStatusLabel.setText(
+                "CITY FOUNDING"
+                        + "\n"
+                        + distanceInfo
+                        + "\nStatus: "
+                        + foundingCheck.reason()
+        );
+
+
+
+        positionLandUnitPanel();
+    }
+
 
 
     // =========================================================================
@@ -850,6 +1291,7 @@ public class EpochGame extends ApplicationAdapter {
             int x = selectedTile.getX();
             int y = selectedTile.getY();
             appendTerritoryInfo(info, x, y);
+            appendLandUnitInfo(info, x, y);
 
             Optional<RiverProperties> riverOptional =
                     riverNetwork.findPropertiesAt(x, y);
@@ -882,6 +1324,16 @@ public class EpochGame extends ApplicationAdapter {
             if (cityOptional.isPresent()) {
 
                 City city = cityOptional.get();
+
+                info.append("\n\nCITY CONTROL")
+                        .append("\nController: ")
+                        .append(
+                                isPlayerCity(city)
+                                        ? "PLAYER"
+                                        : city.isNeutral()
+                                        ? "NEUTRAL"
+                                        : "AI"
+                        );
 
                 String civilizationName = city.isNeutral()
                         ? "Neutral"
@@ -1041,6 +1493,7 @@ public class EpochGame extends ApplicationAdapter {
         tileInfoLabel.setText(info.toString());
 
         updateBuildingPanel();
+        updateLandUnitPanel();
     }
 
     private void appendTerritoryInfo(
@@ -1088,6 +1541,338 @@ public class EpochGame extends ApplicationAdapter {
                 .append('\n');
     }
 
+
+
+    private void toggleLandUnitMoveMode() {
+
+        if (movingLandUnitId != null) {
+            cancelLandUnitMoveMode();
+            return;
+        }
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        LandUnit unit =
+                gameState.getLandUnitManager()
+                        .findUnitAt(
+                                selectedTile.getX(),
+                                selectedTile.getY()
+                        )
+                        .orElse(null);
+
+        if (unit == null) {
+            return;
+        }
+
+        if (!gameState.getPlayerCivilizationManager()
+                .isPlayerCivilization(
+                        unit.getCivilizationId()
+                )) {
+            return;
+        }
+
+        if (landMovementService.getReachableTiles(
+                unit.getId(),
+                worldMap,
+                gameState.getLandUnitManager()
+        ).isEmpty()) {
+            return;
+        }
+
+        if (expansionCityId != null) {
+            cancelExpansionMode();
+        }
+
+        movingLandUnitId = unit.getId();
+
+        updateMovementOutlines();
+        updateLandUnitPanel();
+    }
+
+
+    private void cancelLandUnitMoveMode() {
+
+        movingLandUnitId = null;
+        movementOutlines.clear();
+
+        updateLandUnitPanel();
+    }
+
+
+    private void handleLandUnitMovementClick(
+            int screenX,
+            int screenY
+    ) {
+
+        if (movingLandUnitId == null) {
+            return;
+        }
+
+        // Use the existing terrain raycasting.
+        // Preserve the selected unit during targeting.
+
+        Tile previousSelection = selectedTile;
+
+        selectTile(screenX, screenY);
+
+        Tile targetTile = selectedTile;
+
+        selectedTile = previousSelection;
+        updateSelectionOutline();
+
+        if (targetTile == null) {
+            updateInfoPanel();
+            return;
+        }
+
+        try {
+
+            var result = landMovementService.moveUnit(
+                    movingLandUnitId,
+                    targetTile.getX(),
+                    targetTile.getY(),
+                    worldMap,
+                    gameState.getLandUnitManager()
+            );
+
+            Gdx.app.log(
+                    "LAND MOVEMENT",
+                    "Unit #" + result.unitId()
+                            + " moved to "
+                            + result.x()
+                            + ", "
+                            + result.y()
+                            + " | Cost: "
+                            + result.cost()
+                            + " | Remaining: "
+                            + result.remainingMovementPoints()
+            );
+
+        } catch (
+                IllegalArgumentException
+                | IllegalStateException exception
+        ) {
+
+            Gdx.app.log(
+                    "LAND MOVEMENT",
+                    exception.getMessage()
+            );
+
+            updateInfoPanel();
+            return;
+        }
+
+        movingLandUnitId = null;
+        movementOutlines.clear();
+
+        // Rebuild the visual position of the settler.
+        settlerRenderer.refresh(
+                gameState.getLandUnitManager().getUnits(),
+                gameState.getCivilizationManager()
+        );
+
+        // Follow the moved unit with the selection.
+        selectedTile = targetTile;
+
+        updateSelectionOutline();
+        updateInfoPanel();
+    }
+
+
+    private void updateMovementOutlines() {
+
+        movementOutlines.clear();
+
+        if (movingLandUnitId == null) {
+            return;
+        }
+
+        var reachableTiles =
+                landMovementService.getReachableTiles(
+                        movingLandUnitId,
+                        worldMap,
+                        gameState.getLandUnitManager()
+                );
+
+        for (var position : reachableTiles) {
+
+            Tile tile = worldMap.getTile(
+                    position.x(),
+                    position.y()
+            );
+
+            Vector3[] vertices =
+                    TerrainMeshBuilder.getTileVertices(
+                            worldMap,
+                            tile
+                    );
+
+            for (int i = 0; i < 4; i++) {
+
+                Vector3 start =
+                        new Vector3(vertices[i])
+                                .add(0f, 0.14f, 0f);
+
+                Vector3 end =
+                        new Vector3(
+                                vertices[(i + 1) % 4]
+                        ).add(0f, 0.14f, 0f);
+
+                addMovementOutlineEdge(start, end);
+            }
+        }
+    }
+
+
+    private void addMovementOutlineEdge(
+            Vector3 start,
+            Vector3 end
+    ) {
+
+        Vector3 direction =
+                new Vector3(end).sub(start);
+
+        float length = direction.len();
+
+        if (length < 0.0001f) {
+            return;
+        }
+
+        direction.nor();
+
+        Vector3 midpoint =
+                new Vector3(start)
+                        .add(end)
+                        .scl(0.5f);
+
+        Quaternion rotation =
+                new Quaternion()
+                        .setFromCross(
+                                Vector3.Y,
+                                direction
+                        );
+
+        ModelInstance instance =
+                new ModelInstance(selectionEdgeModel);
+
+        instance.transform.set(
+                midpoint,
+                rotation,
+                new Vector3(
+                        0.06f,
+                        length,
+                        0.06f
+                )
+        );
+
+        instance.materials.first().set(
+                ColorAttribute.createDiffuse(
+                        new Color(
+                                0.15f,
+                                0.75f,
+                                1f,
+                                1f
+                        )
+                )
+        );
+
+        movementOutlines.add(instance);
+    }
+
+
+
+
+
+
+
+    private void appendLandUnitInfo(
+            StringBuilder info,
+            int x,
+            int y
+    ) {
+
+        var unitOptional =
+                gameState.getLandUnitManager()
+                        .findUnitAt(x, y);
+
+        if (unitOptional.isEmpty()) {
+            return;
+        }
+
+        LandUnit unit = unitOptional.get();
+
+        String civilizationName =
+                gameState.getCivilizationManager()
+                        .findCivilization(
+                                unit.getCivilizationId()
+                        )
+                        .map(civilization ->
+                                civilization.getName()
+                        )
+                        .orElse("Unknown");
+
+        info.append("\n\nLAND UNIT")
+                .append("\nType: ")
+                .append(unit.getType())
+                .append("\nID: ")
+                .append(unit.getId())
+                .append("\nCivilization: ")
+                .append(civilizationName)
+                .append("\nMovement: ")
+                .append(unit.getMovementPoints())
+                .append("/")
+                .append(unit.getMaxMovementPoints());
+    }
+
+
+
+    private void updateSettlerRecruitmentControls(City city) {
+
+        if (trainSettlerButton == null
+                || settlerRecruitmentStatusLabel == null) {
+            return;
+        }
+
+        boolean playerCity = isPlayerCity(city);
+
+        if (!playerCity) {
+
+            trainSettlerButton.setDisabled(true);
+            settlerRecruitmentStatusLabel.setText("");
+
+            return;
+        }
+
+        var check =
+                settlerRecruitmentService.checkRecruitment(
+                        city.getId(),
+                        gameState,
+                        worldMap
+                );
+
+        trainSettlerButton.setDisabled(
+                !check.allowed()
+        );
+
+        String status =
+                "Cost: "
+                        + SettlerRecruitmentConfig.WOOD_COST
+                        + " Wood, "
+                        + SettlerRecruitmentConfig.FOOD_COST
+                        + " Food, "
+                        + SettlerRecruitmentConfig.POPULATION_COST
+                        + " Population"
+                        + "\nStatus: "
+                        + (check.allowed()
+                        ? "Ready to train"
+                        : check.reason());
+
+        settlerRecruitmentStatusLabel.setText(status);
+    }
+
+
     private void updateBuildingPanel() {
 
         if (buildingPanel == null) {
@@ -1113,6 +1898,12 @@ public class EpochGame extends ApplicationAdapter {
         }
 
         City city = cityOptional.get();
+
+        if (!isPlayerCity(city)) {
+
+            buildingPanel.setVisible(false);
+            return;
+        }
 
         buildingPanel.setVisible(true);
 
@@ -1180,6 +1971,7 @@ public class EpochGame extends ApplicationAdapter {
         }
 
         updateExpansionControls(city);
+        updateSettlerRecruitmentControls(city);
 
         buildingStatusLabel.setText(
                 "Choose an available building"
@@ -1187,6 +1979,122 @@ public class EpochGame extends ApplicationAdapter {
 
         positionBuildingPanel();
     }
+
+
+    private void trainSettlerInSelectedCity() {
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        City city = gameState.getCityManager()
+                .findCityAt(
+                        selectedTile.getX(),
+                        selectedTile.getY()
+                )
+                .orElse(null);
+
+        if (city == null || !isPlayerCity(city)) {
+            return;
+        }
+
+        LandUnit settler;
+
+        try {
+
+            settler = settlerRecruitmentService.recruitSettler(
+                    city.getId(),
+                    gameState,
+                    worldMap
+            );
+
+        } catch (
+                IllegalArgumentException
+                | IllegalStateException exception
+        ) {
+
+            Gdx.app.log(
+                    "SETTLER RECRUITMENT",
+                    exception.getMessage()
+            );
+
+            updateInfoPanel();
+            return;
+        }
+
+        // Cancel active map-selection modes.
+        expansionCityId = null;
+        expansionOutlines.clear();
+
+        movingLandUnitId = null;
+        movementOutlines.clear();
+
+        // Refresh 3D settler models.
+        settlerRenderer.refresh(
+                gameState.getLandUnitManager().getUnits(),
+                gameState.getCivilizationManager()
+        );
+
+        Gdx.app.log(
+                "SETTLER RECRUITMENT",
+                city.getName()
+                        + " trained settler #"
+                        + settler.getId()
+                        + " at "
+                        + settler.getX()
+                        + ", "
+                        + settler.getY()
+        );
+
+        // Select the new unit.
+        selectedTile = worldMap.getTile(
+                settler.getX(),
+                settler.getY()
+        );
+
+        updateSelectionOutline();
+        updateInfoPanel();
+    }
+
+
+
+    private String getNearestCityDistanceInfo(
+            LandUnit settler
+    ) {
+
+        var settings = gameState.getCityFoundingSettings();
+
+        City nearestCity = null;
+        int smallestGap = Integer.MAX_VALUE;
+
+        for (City city :
+                gameState.getCityManager().getCities()) {
+
+            int gap = settings.countEmptyTilesBetween(
+                    settler.getX(),
+                    settler.getY(),
+                    city.getX(),
+                    city.getY()
+            );
+
+            if (gap < smallestGap) {
+                smallestGap = gap;
+                nearestCity = city;
+            }
+        }
+
+        if (nearestCity == null) {
+            return "Nearest city: None";
+        }
+
+        return "Nearest: " + nearestCity.getName()
+                + "\nEmpty tiles: "
+                + smallestGap
+                + " / "
+                + settings.getMinimumCityDistance();
+    }
+
+
 
     private void constructSelectedBuilding(
             BuildingType buildingType
@@ -1207,6 +2115,10 @@ public class EpochGame extends ApplicationAdapter {
         }
 
         City city = cityOptional.get();
+
+        if (!isPlayerCity(city)) {
+            return;
+        }
 
         var buildingManager =
                 gameState.getCityBuildingManager();
@@ -1439,6 +2351,10 @@ public class EpochGame extends ApplicationAdapter {
 
         City city = cityOptional.get();
 
+        if (!isPlayerCity(city)) {
+            return;
+        }
+
         if (!gameState.getCityInfluenceManager()
                 .hasEnoughInfluence(city.getId())) {
             return;
@@ -1491,6 +2407,12 @@ public class EpochGame extends ApplicationAdapter {
                 .orElse(null);
 
         if (city == null) {
+            cancelExpansionMode();
+            return;
+        }
+
+        if (!isPlayerCity(city)) {
+
             cancelExpansionMode();
             return;
         }
@@ -1576,6 +2498,10 @@ public class EpochGame extends ApplicationAdapter {
         }
 
         City city = cityOptional.get();
+
+        if (!isPlayerCity(city)) {
+            return;
+        }
 
         if (city.getCivilizationId() == null) {
             return;
@@ -1725,12 +2651,28 @@ public class EpochGame extends ApplicationAdapter {
         InputAdapter tileInput = new InputAdapter() {
             @Override
             public boolean touchDown(
-                    int screenX, int screenY, int pointer, int button) {
+                    int screenX,
+                    int screenY,
+                    int pointer,
+                    int button
+            ) {
 
                 if (button != Input.Buttons.LEFT) {
                     return false;
                 }
 
+                // 1. Land unit movement
+                if (movingLandUnitId != null) {
+
+                    handleLandUnitMovementClick(
+                            screenX,
+                            screenY
+                    );
+
+                    return true;
+                }
+
+                // 2. Territory expansion
                 if (expansionCityId != null) {
 
                     handleExpansionClick(
@@ -1741,18 +2683,27 @@ public class EpochGame extends ApplicationAdapter {
                     return true;
                 }
 
+                // 3. Standard tile selection
                 selectTile(screenX, screenY);
 
-                boolean shift = Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
-                        || Gdx.input.isKeyPressed(Input.Keys.SHIFT_RIGHT);
+                boolean shift =
+                        Gdx.input.isKeyPressed(Input.Keys.SHIFT_LEFT)
+                                || Gdx.input.isKeyPressed(
+                                Input.Keys.SHIFT_RIGHT
+                        );
 
                 if (shift) {
+
                     selectRiverRoutePoint();
+
                 } else {
+
                     selectTransportUnitAtSelectedTile();
                 }
+
                 return true;
             }
+
 
             @Override
             public boolean keyDown(int keycode) {
@@ -2119,11 +3070,68 @@ public class EpochGame extends ApplicationAdapter {
         }
     }
 
+
+    private int[] findSettlerSpawnTile(City city) {
+
+        // Prefer orthogonally adjacent tiles.
+        // Diagonal tiles are used as fallback.
+        int[][] directions = {
+                {1, 0},
+                {0, 1},
+                {-1, 0},
+                {0, -1},
+                {1, 1},
+                {-1, 1},
+                {1, -1},
+                {-1, -1}
+        };
+
+        for (int[] direction : directions) {
+
+            int x = city.getX() + direction[0];
+            int y = city.getY() + direction[1];
+
+            if (!worldMap.isInsideMap(x, y)) {
+                continue;
+            }
+
+            Tile tile = worldMap.getTile(x, y);
+
+            if (!tile.isPassableForLandUnits()) {
+                continue;
+            }
+
+            if (gameState.getCityManager()
+                    .findCityAt(x, y)
+                    .isPresent()) {
+                continue;
+            }
+
+            if (gameState.getLandUnitManager()
+                    .findUnitAt(x, y)
+                    .isPresent()) {
+                continue;
+            }
+
+            return new int[]{x, y};
+        }
+
+        throw new IllegalStateException(
+                "No available tile near city: "
+                        + city.getName()
+        );
+    }
+
+
     private void advanceGameTurn() {
 
         int claimedTilesBefore =
                 gameState.getTerritoryManager()
                         .getClaimedTileCount();
+
+        if (movingLandUnitId != null) {
+            cancelLandUnitMoveMode();
+        }
 
         GameEngine.TurnReport report = gameEngine.endTurn();
         RiverTransportManager manager =
@@ -2215,6 +3223,102 @@ public class EpochGame extends ApplicationAdapter {
     }
 
 
+
+    private void foundCityWithSelectedSettler() {
+
+        if (selectedTile == null) {
+            return;
+        }
+
+        LandUnit settler =
+                gameState.getLandUnitManager()
+                        .findUnitAt(
+                                selectedTile.getX(),
+                                selectedTile.getY()
+                        )
+                        .orElse(null);
+
+        if (settler == null) {
+            return;
+        }
+
+        // Only the player's civilization can be
+        // controlled through this UI.
+        if (!gameState.getPlayerCivilizationManager()
+                .isPlayerCivilization(
+                        settler.getCivilizationId()
+                )) {
+            return;
+        }
+
+        City newCity;
+
+        try {
+
+            newCity = cityFoundingService.foundCity(
+                    settler.getId(),
+                    gameState,
+                    worldMap
+            );
+
+        } catch (
+                IllegalArgumentException
+                | IllegalStateException exception
+        ) {
+
+            Gdx.app.log(
+                    "CITY FOUNDING",
+                    exception.getMessage()
+            );
+
+            updateInfoPanel();
+            return;
+        }
+
+        // End movement-selection mode.
+        movingLandUnitId = null;
+        movementOutlines.clear();
+
+        // Refresh settlers: the founding unit is gone.
+        settlerRenderer.refresh(
+                gameState.getLandUnitManager().getUnits(),
+                gameState.getCivilizationManager()
+        );
+
+        // Refresh the city models on the map.
+        cityRenderer.setCities(
+                gameState.getCityManager().getCities(),
+                gameState.getCivilizationManager()
+        );
+
+        cityBuildingRenderer.refresh(
+                gameState.getCityManager().getCities(),
+                gameState.getCityBuildingManager()
+        );
+
+        // Refresh territorial borders.
+        territoryBorderRenderer.refresh(
+                gameState.getTerritoryManager(),
+                gameState.getCivilizationManager()
+        );
+
+        Gdx.app.log(
+                "CITY FOUNDING",
+                "Founded " + newCity.getName()
+                        + " at "
+                        + newCity.getX()
+                        + ", "
+                        + newCity.getY()
+        );
+
+        // Keep the founding tile selected.
+        // It now contains a city, not the settler.
+        updateSelectionOutline();
+        updateInfoPanel();
+    }
+
+
+
     // =========================================================================
     // Application lifecycle: drawing and cleanup
     // =========================================================================
@@ -2231,8 +3335,10 @@ public class EpochGame extends ApplicationAdapter {
         terrainChunkManager.render(camera, modelBatch, environment);
         riverRenderer.render(modelBatch, environment);
         cityRenderer.render(modelBatch, environment);
+        settlerRenderer.render(modelBatch, environment);
         cityBuildingRenderer.render(modelBatch, environment);
         modelBatch.render(expansionOutlines, environment);
+        modelBatch.render(movementOutlines, environment);
         riverRouteRenderer.render(modelBatch, environment);
         riverTransportRenderer.render(modelBatch, environment);
         territoryBorderRenderer.render(modelBatch, environment);
@@ -2258,6 +3364,7 @@ public class EpochGame extends ApplicationAdapter {
         );
 
         positionBuildingPanel();
+        positionLandUnitPanel();
     }
 
     @Override
@@ -2306,6 +3413,10 @@ public class EpochGame extends ApplicationAdapter {
 
         if (cityBuildingRenderer != null) {
             cityBuildingRenderer.dispose();
+        }
+
+        if (settlerRenderer != null) {
+            settlerRenderer.dispose();
         }
 
     }

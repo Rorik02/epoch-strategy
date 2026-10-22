@@ -137,6 +137,9 @@ public class GameEngine {
         }
 
 
+        gameState.getLandUnitManager()
+                .restoreAllMovementPoints();
+
 
         // 4. Advance the game calendar.
         gameState.advanceTurn();
